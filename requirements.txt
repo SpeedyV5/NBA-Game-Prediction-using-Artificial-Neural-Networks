@@ -1,0 +1,6 @@
+pandas
+numpy
+requests
+tqdm
+python-dateutil
+nba_api

@@ -1,0 +1,30 @@
+# Python derleme dosyaları
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Sanal ortamlar
+venv/
+.env/
+
+# Jupyter checkpointleri
+.ipynb_checkpoints/
+
+# Ham ve ara veriler (GitHub'a yüklenmesin!)
+data_raw/
+data_interim/
+
+# VS Code ayar dosyaları
+.vscode/
+
+# Log dosyaları
+*.log
+
+# Model weights (çok büyük olabilir)
+models/*.h5
+models/*.pt
+
+# OS / sistem dosyaları
+.DS_Store
+Thumbs.db
