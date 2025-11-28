@@ -1,13 +1,19 @@
-# Python
+# Python derleme dosyaları
 __pycache__/
 *.py[cod]
+*.pyc
+*.pyo
+*.pyd
 *$py.class
 *.so
 .Python
+
+# Sanal ortamlar
 env/
 venv/
 ENV/
 .venv
+.env/
 
 # Jupyter Notebook
 .ipynb_checkpoints
@@ -32,14 +38,13 @@ models/*.joblib
 *.swo
 *~
 
-# OS
+# OS / sistem dosyaları
 .DS_Store
 Thumbs.db
 
-# Logs
+# Log dosyaları
 *.log
 
 # Temporary files
 *.tmp
 *.temp
-
