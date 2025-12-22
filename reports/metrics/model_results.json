@@ -1,0 +1,219 @@
+{
+  "mlp_classifier": {
+    "seed": 30,
+    "scaler": "StandardScaler(train_fit_only)",
+    "features_used": 203,
+    "best_hyperparams": {
+      "name": "MLP_C3",
+      "hidden_units": [
+        512,
+        256,
+        128,
+        64
+      ],
+      "dropout": 0.3,
+      "batchnorm": true,
+      "lr": 0.0005
+    },
+    "val": {
+      "accuracy": 0.6532405712193335,
+      "f1": 0.7101316192225283,
+      "roc_auc": 0.6959537409301255,
+      "logloss": 0.6301702582047597,
+      "brier": 0.21952294653132515,
+      "confusion_matrix": [
+        [
+          624,
+          600
+        ],
+        [
+          347,
+          1160
+        ]
+      ]
+    },
+    "test": {
+      "accuracy": 0.6665446559297218,
+      "f1": 0.7256850346281241,
+      "roc_auc": 0.7108457428015041,
+      "logloss": 0.6143429102350448,
+      "brier": 0.2123910948478816,
+      "confusion_matrix": [
+        [
+          616,
+          549
+        ],
+        [
+          362,
+          1205
+        ]
+      ]
+    },
+    "model_path": "models/mlp_classifier_best.h5",
+    "predictions_path": "data_processed/predictions_mlp.csv",
+    "figures": {
+      "train_loss": "reports/figures/mlp\\classifier\\train_MLP_C3_loss.png",
+      "train_accuracy": "reports/figures/mlp\\classifier\\train_MLP_C3_accuracy.png",
+      "train_auc": "reports/figures/mlp\\classifier\\train_MLP_C3_auc.png",
+      "test_confusion_matrix": "reports/figures/mlp\\classifier\\test_confusion_matrix.png",
+      "test_roc": "reports/figures/mlp\\classifier\\test_roc.png",
+      "test_calibration": "reports/figures/mlp\\classifier\\test_calibration.png"
+    }
+  },
+  "mlp_regressor": {
+    "seed": 30,
+    "scaler": "StandardScaler(train_fit_only)",
+    "features_used": 203,
+    "best_hyperparams": {
+      "name": "MLP_R2",
+      "hidden_units": [
+        256,
+        128,
+        64
+      ],
+      "dropout": 0.1,
+      "batchnorm": false,
+      "lr": 0.001,
+      "loss": "huber(delta=5.0)",
+      "loss_name": "huber(delta=5.0)"
+    },
+    "val": {
+      "mae": 9.928062670071977,
+      "rmse": 12.79277906709021
+    },
+    "test": {
+      "mae": 10.064466379280168,
+      "rmse": 12.913186754339883
+    },
+    "model_path": "models/mlp_regressor_best.h5",
+    "predictions_path": "data_processed/predictions_mlp.csv",
+    "figures": {
+      "test_scatter": "reports/figures/mlp\\regressor\\test_scatter.png",
+      "train_loss": "reports/figures/mlp\\regressor\\train_MLP_R2_loss.png"
+    }
+  },
+  "baseline_gbm": {
+    "seed": 30,
+    "scaler": "StandardScaler(train_fit_only)",
+    "features_used": 203,
+    "hyperparams": {
+      "model": "GradientBoostingClassifier/Regressor (sklearn default)"
+    },
+    "val": {
+      "classification": {
+        "accuracy": 0.6418894177956792,
+        "f1": 0.7027355623100304,
+        "roc_auc": 0.6914296463995906,
+        "logloss": 0.6316161091359075,
+        "brier": 0.2206550066534673,
+        "confusion_matrix": [
+          [
+            597,
+            627
+          ],
+          [
+            351,
+            1156
+          ]
+        ]
+      },
+      "regression": {
+        "mae": 9.96514155517021,
+        "rmse": 12.78671209615828
+      }
+    },
+    "test": {
+      "classification": {
+        "accuracy": 0.66800878477306,
+        "f1": 0.7303003270889087,
+        "roc_auc": 0.7175675342567056,
+        "logloss": 0.6099429249141726,
+        "brier": 0.21062016780190723,
+        "confusion_matrix": [
+          [
+            597,
+            568
+          ],
+          [
+            339,
+            1228
+          ]
+        ]
+      },
+      "regression": {
+        "mae": 10.036017515432462,
+        "rmse": 12.86597925872007
+      }
+    },
+    "predictions_path": "data_processed/predictions_baseline.csv",
+    "figures": {
+      "classifier": {
+        "confusion_matrix": "reports/figures/baseline\\classifier\\baseline_test_confusion_matrix.png",
+        "roc": "reports/figures/baseline\\classifier\\baseline_test_roc.png",
+        "calibration": "reports/figures/baseline\\classifier\\baseline_test_calibration.png"
+      },
+      "regressor": {
+        "scatter": "reports/figures/baseline\\regressor\\baseline_test_scatter.png"
+      }
+    }
+  },
+  "sequence_lstm_classifier": {
+    "seed": 30,
+    "scaler": "StandardScaler(train_fit_only)",
+    "features_used": 203,
+    "sequence": {
+      "N": 10,
+      "real_sequence_used": true,
+      "model_type": "lstm",
+      "note": "If real_sequence_used=False, fallback repeats tabular rows as sequences."
+    },
+    "val": {
+      "accuracy": 0.6396924203588429,
+      "f1": 0.6974169741697417,
+      "roc_auc": 0.675605887123706,
+      "logloss": 0.6429406906096405,
+      "brier": 0.22543153166770935,
+      "confusion_matrix": [
+        [
+          613,
+          611
+        ],
+        [
+          373,
+          1134
+        ]
+      ]
+    },
+    "test": {
+      "accuracy": 0.6617862371888726,
+      "f1": 0.720845921450151,
+      "roc_auc": 0.700757851721805,
+      "logloss": 0.6202114385468565,
+      "brier": 0.21551795303821564,
+      "confusion_matrix": [
+        [
+          615,
+          550
+        ],
+        [
+          374,
+          1193
+        ]
+      ]
+    },
+    "model_path": "models/sequence_lstm_classifier_best.h5",
+    "predictions_path": "data_processed/predictions_sequence_lstm.csv",
+    "figures": {
+      "curves": {
+        "loss": "reports\\figures\\sequence\\classifier\\train_lstm_N10_loss.png",
+        "accuracy": "reports\\figures\\sequence\\classifier\\train_lstm_N10_accuracy.png",
+        "auc": "reports\\figures\\sequence\\classifier\\train_lstm_N10_auc.png"
+      },
+      "test": {
+        "confusion_matrix": "reports\\figures\\sequence\\classifier\\test_lstm_N10_confusion_matrix.png",
+        "roc": "reports\\figures\\sequence\\classifier\\test_lstm_N10_roc.png",
+        "calibration": "reports\\figures\\sequence\\classifier\\test_lstm_N10_calibration.png"
+      }
+    }
+  }
+}

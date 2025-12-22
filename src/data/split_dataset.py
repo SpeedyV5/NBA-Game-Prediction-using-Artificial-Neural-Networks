@@ -556,7 +556,7 @@ def create_random_split(
     train_ratio: float = 0.70,
     val_ratio: float = 0.15,
     test_ratio: float = 0.15,
-    random_state: int = 42,
+    random_state: int = 30,
     date_col: str = "game_date",
     required_cols: Optional[list] = None
 ) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
@@ -664,7 +664,7 @@ if __name__ == "__main__":
         train_ratio=0.70,
         val_ratio=0.15,
         test_ratio=0.15,
-        random_state=42
+        random_state=30
     )
     
     # Eski zaman bazlı split için:
