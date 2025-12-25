@@ -6,3 +6,11 @@ requests
 tqdm
 python-dateutil
 nba_api
+tensorflow>=2.10.0
+scikit-learn>=1.0.0
+joblib>=1.0.0
+matplotlib>=3.5.0
+seaborn>=0.12.0
+tabulate
+beautifulsoup4
+pdfplumber

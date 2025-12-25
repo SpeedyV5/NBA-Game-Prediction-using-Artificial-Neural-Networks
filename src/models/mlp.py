@@ -8,7 +8,7 @@ from typing import Dict, Tuple, List
 import numpy as np
 import pandas as pd
 
-from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import RobustScaler, StandardScaler
 from sklearn.metrics import (
     accuracy_score, f1_score, roc_auc_score, log_loss,
     confusion_matrix, brier_score_loss, mean_absolute_error,
@@ -115,7 +115,7 @@ def infer_feature_cols(df: pd.DataFrame) -> List[str]:
 
 def prepare_tabular(
     train: pd.DataFrame, val: pd.DataFrame, test: pd.DataFrame
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray, StandardScaler, List[str], np.ndarray]:
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, RobustScaler, List[str], np.ndarray]:
     feat_cols = infer_feature_cols(train)
 
     X_train = train[feat_cols].to_numpy(dtype=np.float32, copy=True)
@@ -142,8 +142,8 @@ def prepare_tabular(
     X_val   = np.where(np.isnan(X_val),   train_median, X_val)
     X_test  = np.where(np.isnan(X_test),  train_median, X_test)
 
-    # 3) Scale (fit only on train)
-    scaler = StandardScaler()
+    # 3) Scale using RobustScaler (fit only on train) - better for outliers
+    scaler = RobustScaler()
     X_train_s = scaler.fit_transform(X_train)
     X_val_s   = scaler.transform(X_val)
     X_test_s  = scaler.transform(X_test)
@@ -329,9 +329,9 @@ def main():
         json.dump(feat_cols, f, ensure_ascii=False, indent=2)
     print(f"[OK] Saved: models/feature_cols.json (n={len(feat_cols)})")
 
-    # 2) scaler
+    # 2) scaler (RobustScaler for input features)
     joblib.dump(scaler, "models/scaler.joblib")
-    print("[OK] Saved: models/scaler.joblib")
+    print("[OK] Saved: models/scaler.joblib (RobustScaler)")
 
     # 3) train median (NaN fill için)
     joblib.dump(train_median, "models/train_median.joblib")
@@ -361,7 +361,8 @@ def main():
         ckpt_path = best_model_path  # required name
         callbacks = [
             keras.callbacks.EarlyStopping(monitor="val_auc", mode="max", patience=10, restore_best_weights=True),
-            keras.callbacks.ModelCheckpoint(ckpt_path, monitor="val_auc", mode="max", save_best_only=True)
+            keras.callbacks.ModelCheckpoint(ckpt_path, monitor="val_auc", mode="max", save_best_only=True),
+            keras.callbacks.ReduceLROnPlateau(monitor="val_loss", factor=0.5, patience=5, min_lr=1e-6, verbose=1)
         ]
 
         history = model.fit(
@@ -402,6 +403,61 @@ def main():
     y_train_r = train["score_diff"].values.astype(float)
     y_val_r   = val["score_diff"].values.astype(float)
     y_test_r  = test["score_diff"].values.astype(float)
+    
+    # Remove NaN values from score_diff (drop rows with NaN for training only)
+    train_mask = ~np.isnan(y_train_r)
+    val_mask = ~np.isnan(y_val_r)
+    test_mask = ~np.isnan(y_test_r)
+    
+    # Keep original arrays for predictions CSV, use filtered for training
+    X_train_reg = X_train[train_mask] if not train_mask.all() else X_train
+    y_train_r_reg = y_train_r[train_mask] if not train_mask.all() else y_train_r
+    X_val_reg = X_val[val_mask] if not val_mask.all() else X_val
+    y_val_r_reg = y_val_r[val_mask] if not val_mask.all() else y_val_r
+    X_test_reg = X_test[test_mask] if not test_mask.all() else X_test
+    y_test_r_reg = y_test_r[test_mask] if not test_mask.all() else y_test_r
+    
+    if not train_mask.all():
+        print(f"[WARN] Dropping {np.sum(~train_mask)} rows with NaN score_diff from train for regressor")
+    if not val_mask.all():
+        print(f"[WARN] Dropping {np.sum(~val_mask)} rows with NaN score_diff from val for regressor")
+    if not test_mask.all():
+        print(f"[WARN] Dropping {np.sum(~test_mask)} rows with NaN score_diff from test for regressor")
+    
+    # === TARGET SCALING FOR REGRESSION ===
+    # Verify target values before scaling
+    print(f"[DEBUG] y_train_r_reg stats: mean={np.mean(y_train_r_reg):.2f}, std={np.std(y_train_r_reg):.2f}")
+    print(f"[DEBUG] y_train_r_reg sample (first 10): {y_train_r_reg[:10]}")
+    
+    # Check if NaN filtering changed distribution
+    if not train_mask.all():
+        y_train_r_all_mean = np.nanmean(y_train_r)
+        print(f"[DEBUG] y_train_r (all, including NaN) mean: {y_train_r_all_mean:.2f}")
+        print(f"[DEBUG] y_train_r_reg (filtered) mean: {np.mean(y_train_r_reg):.2f}")
+        if abs(y_train_r_all_mean - np.mean(y_train_r_reg)) > 1.0:
+            print(f"[WARN] Mean changed significantly after NaN filtering!")
+    
+    # Create and fit target scaler on training data (reshaped to 2D)
+    target_scaler = StandardScaler()
+    y_train_r_reg_scaled = target_scaler.fit_transform(y_train_r_reg.reshape(-1, 1)).reshape(-1)
+    y_val_r_reg_scaled = target_scaler.transform(y_val_r_reg.reshape(-1, 1)).reshape(-1)
+    y_test_r_reg_scaled = target_scaler.transform(y_test_r_reg.reshape(-1, 1)).reshape(-1)
+    
+    # Verify scaled target distribution
+    scaled_mean = np.mean(y_train_r_reg_scaled)
+    scaled_std = np.std(y_train_r_reg_scaled)
+    print(f"[DEBUG] Scaled target stats: mean={scaled_mean:.4f}, std={scaled_std:.4f}")
+    print(f"[DEBUG] Scaled target should be ~N(0,1), actual: mean={scaled_mean:.4f}, std={scaled_std:.4f}")
+    
+    # Validation assertions
+    assert abs(scaled_mean) < 0.1, f"Scaled target mean should be ~0, got {scaled_mean:.4f}"
+    assert scaled_std > 0.9, f"Scaled target std should be ~1, got {scaled_std:.4f}"
+    
+    print(f"[INFO] Target scaler fitted: mean={target_scaler.mean_[0]:.2f}, scale={target_scaler.scale_[0]:.2f}")
+    
+    # Save target scaler
+    joblib.dump(target_scaler, "models/scaler_target.joblib")
+    print("[OK] Saved: models/scaler_target.joblib")
 
     reg_variants = [
         {"name": "MLP_R1", "hidden_units": [256, 128, 64], "dropout": 0.1, "batchnorm": False, "lr": 1e-3, 
@@ -416,25 +472,37 @@ def main():
 
     for hp in reg_variants:
         tf.keras.backend.clear_session()
-        model = build_mlp_regressor(X_train.shape[1], hp)
+        model = build_mlp_regressor(X_train_reg.shape[1], hp)
 
         callbacks = [
             keras.callbacks.EarlyStopping(monitor="val_loss", mode="min", patience=10, restore_best_weights=True),
-            keras.callbacks.ModelCheckpoint(OUT_MODEL_REG, monitor="val_loss", mode="min", save_best_only=True)
+            keras.callbacks.ModelCheckpoint(OUT_MODEL_REG, monitor="val_loss", mode="min", save_best_only=True),
+            keras.callbacks.ReduceLROnPlateau(monitor="val_loss", factor=0.5, patience=5, min_lr=1e-6, verbose=1)
         ]
 
         history = model.fit(
-            X_train, y_train_r,
-            validation_data=(X_val, y_val_r),
+            X_train_reg, y_train_r_reg_scaled,
+            validation_data=(X_val_reg, y_val_r_reg_scaled),
             epochs=200,
             batch_size=256,
             callbacks=callbacks,
             verbose=2
         )
 
-        val_pred = model.predict(X_val, verbose=0).reshape(-1)
-        val_rmse = float(np.sqrt(mean_squared_error(y_val_r, val_pred)))
-        print(f"[{hp['name']}] val_rmse={val_rmse:.4f}")
+        # Predict on scaled target, then inverse transform for evaluation
+        val_pred_scaled = model.predict(X_val_reg, verbose=0).reshape(-1)
+        val_pred = target_scaler.inverse_transform(val_pred_scaled.reshape(-1, 1)).reshape(-1)
+        
+        # Prediction validation during training
+        val_target_mean = np.mean(y_val_r_reg)
+        val_pred_mean = np.mean(val_pred)
+        if val_target_mean > 0 and val_pred_mean < -5:
+            print(f"[ERROR] Model predicting negative (mean={val_pred_mean:.2f}) when target is positive (mean={val_target_mean:.2f})!")
+        elif val_target_mean < 0 and val_pred_mean > 5:
+            print(f"[ERROR] Model predicting positive (mean={val_pred_mean:.2f}) when target is negative (mean={val_target_mean:.2f})!")
+        
+        val_rmse = float(np.sqrt(mean_squared_error(y_val_r_reg, val_pred)))
+        print(f"[{hp['name']}] val_rmse={val_rmse:.4f}, val_pred_mean={val_pred_mean:.2f}, val_target_mean={val_target_mean:.2f}")
 
         plot_and_save_history(history, os.path.join(FIG_REG, f"train_{hp['name']}"), is_classifier=False)
 
@@ -444,11 +512,25 @@ def main():
 
     reg_best = keras.models.load_model(OUT_MODEL_REG)
 
-    val_pred_r = reg_best.predict(X_val, verbose=0).reshape(-1)
-    test_pred_r = reg_best.predict(X_test, verbose=0).reshape(-1)
+    # Use filtered data for metrics (predict on scaled, then inverse transform)
+    val_pred_r_filtered_scaled = reg_best.predict(X_val_reg, verbose=0).reshape(-1)
+    test_pred_r_filtered_scaled = reg_best.predict(X_test_reg, verbose=0).reshape(-1)
+    
+    # Inverse transform to original scale
+    val_pred_r_filtered = target_scaler.inverse_transform(val_pred_r_filtered_scaled.reshape(-1, 1)).reshape(-1)
+    test_pred_r_filtered = target_scaler.inverse_transform(test_pred_r_filtered_scaled.reshape(-1, 1)).reshape(-1)
 
-    reg_val_metrics = eval_regression(y_val_r, val_pred_r)
-    reg_test_metrics = eval_regression(y_test_r, test_pred_r)
+    reg_val_metrics = eval_regression(y_val_r_reg, val_pred_r_filtered)
+    reg_test_metrics = eval_regression(y_test_r_reg, test_pred_r_filtered)
+    
+    # For predictions CSV, predict on all data (including NaN rows)
+    # Need to handle NaN rows: predict on all X, but only inverse transform valid predictions
+    val_pred_r_scaled = reg_best.predict(X_val, verbose=0).reshape(-1)
+    test_pred_r_scaled = reg_best.predict(X_test, verbose=0).reshape(-1)
+    
+    # Inverse transform all predictions (NaN rows will have predictions but we'll handle them in CSV)
+    val_pred_r = target_scaler.inverse_transform(val_pred_r_scaled.reshape(-1, 1)).reshape(-1)
+    test_pred_r = target_scaler.inverse_transform(test_pred_r_scaled.reshape(-1, 1)).reshape(-1)
 
     plot_regression_scatter(y_test_r, test_pred_r, os.path.join(FIG_REG, "test_scatter.png"))
 
@@ -466,12 +548,16 @@ def main():
             "score_diff_pred": y_pred_r.astype(float),
         })
 
+    # For train predictions, also need to inverse transform
+    train_pred_r_scaled = reg_best.predict(X_train, verbose=0).reshape(-1)
+    train_pred_r = target_scaler.inverse_transform(train_pred_r_scaled.reshape(-1, 1)).reshape(-1)
+    
     pred_train = make_pred_df(
         "train",
         y_train,
         clf_best.predict(X_train, verbose=0).reshape(-1),
         y_train_r,
-        reg_best.predict(X_train, verbose=0).reshape(-1),
+        train_pred_r,
     )
     pred_val = make_pred_df("val", y_val, val_prob, y_val_r, val_pred_r)
     pred_test = make_pred_df("test", y_test, test_prob, y_test_r, test_pred_r)
@@ -486,7 +572,7 @@ def main():
     metrics_all = read_metrics_json(METRICS_PATH)
     metrics_all["mlp_classifier"] = {
         "seed": RANDOM_SEED,
-        "scaler": "StandardScaler(train_fit_only)",
+        "scaler": "RobustScaler(train_fit_only)",
         "features_used": len(feat_cols),
         "best_hyperparams": best_hp,
         "val": clf_val_metrics,
@@ -511,7 +597,8 @@ def main():
 
     metrics_all["mlp_regressor"] = {
         "seed": RANDOM_SEED,
-        "scaler": "StandardScaler(train_fit_only)",
+        "scaler": "RobustScaler(train_fit_only)",
+        "target_scaler": "StandardScaler(train_fit_only)",
         "features_used": len(feat_cols),
         "best_hyperparams": best_reg_hp_safe,   # <-- BURASI değişti
         "val": reg_val_metrics,

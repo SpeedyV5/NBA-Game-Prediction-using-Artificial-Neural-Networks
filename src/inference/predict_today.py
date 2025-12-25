@@ -57,8 +57,10 @@ class ProjectPaths:
     # Training artifacts
     feature_cols_json: Path
     scaler_joblib: Path
+    scaler_target_joblib: Path  # <--- EKLENDI
     train_median_joblib: Path
-    mlp_model_h5: Path
+    mlp_model_clf: Path         # <--- ISIM DEGISTI
+    mlp_model_reg: Path         # <--- EKLENDI
 
     # Injury script + notebook
     download_injury_script: Path
@@ -82,15 +84,18 @@ def resolve_paths() -> ProjectPaths:
     player_stats_raw_csv = data_raw_dir / "nbastuffer_2025_2026_player_stats_raw.csv"
     team_stats_raw_csv = data_raw_dir / "nbastuffer_2025_2026_team_stats_raw.csv"
 
-    # produced by injury pipeline (03 notebook may fail; script still produces latest_injury.csv; and your other pipeline produces team_status)
+    # produced by injury pipeline
     latest_injury_team_status_csv = data_raw_dir / "injury_reports_raw" / "latest_injury_team_status.csv"
 
     predictions_today_csv = data_processed_dir / "predictions_today.csv"
 
     feature_cols_json = models_dir / "feature_cols.json"
     scaler_joblib = models_dir / "scaler.joblib"
+    scaler_target_joblib = models_dir / "scaler_target.joblib" # <--- Target Scaler
     train_median_joblib = models_dir / "train_median.joblib"
-    mlp_model_h5 = models_dir / "mlp_classifier_best.h5"
+    
+    mlp_model_clf = models_dir / "mlp_classifier_best.h5"
+    mlp_model_reg = models_dir / "mlp_regressor_best.h5"       # <--- Regressor Model
 
     download_injury_script = src_dir / "data" / "download_injury_report.py"
     nb_current_data = notebooks_dir / "01_current_data_download.ipynb"
@@ -111,8 +116,10 @@ def resolve_paths() -> ProjectPaths:
         predictions_today_csv=predictions_today_csv,
         feature_cols_json=feature_cols_json,
         scaler_joblib=scaler_joblib,
+        scaler_target_joblib=scaler_target_joblib,
         train_median_joblib=train_median_joblib,
-        mlp_model_h5=mlp_model_h5,
+        mlp_model_clf=mlp_model_clf,
+        mlp_model_reg=mlp_model_reg,
         download_injury_script=download_injury_script,
         nb_current_data=nb_current_data,
     )
@@ -165,40 +172,19 @@ def run_notebook_nbconvert(nb_path: Path, *, cwd: Path) -> None:
 
 
 def read_csv_safe(path: Path) -> pd.DataFrame:
-    """
-    Try:
-      1) given path
-      2) repo_root/data_raw/<name>
-      3) repo_root/<name>
-    """
     if path.exists():
         return pd.read_csv(path)
-
     repo_root = resolve_paths().repo_root
     alt1 = repo_root / "data_raw" / path.name
     if alt1.exists():
         return pd.read_csv(alt1)
-
     alt2 = repo_root / path.name
     if alt2.exists():
         return pd.read_csv(alt2)
-
     raise FileNotFoundError(f"Missing CSV: {path} (also tried {alt1} and {alt2})")
 
 
 def _sanitize_stat_col(col: str) -> str:
-    """
-    Make raw column names match training naming style:
-      - spaces -> _
-      - % -> pct
-      - remove dots
-      - remove parentheses
-      - collapse __
-    Examples:
-      WIN% -> WINpct
-      1 DAY W% -> 1_DAY_Wpct
-      5 IN 7 -> 5_IN_7
-    """
     s = str(col).strip()
     s = s.replace("%", "pct")
     s = s.replace(".", "")
@@ -223,15 +209,6 @@ def _first_existing_col(df: pd.DataFrame, candidates: List[str]) -> Optional[str
 # Today games (from rest_days_stats OPPONENT TODAY)
 # -----------------------------
 def load_today_games_from_rest_days(paths: ProjectPaths) -> pd.DataFrame:
-    """
-    rest_days_stats has per-team "OPPONENT TODAY" like:
-      - "vs. Miami Heat"  (HOME)
-      - "@ Boston Celtics" (AWAY)
-
-    We build games by taking only the "vs." rows:
-      home = TEAM NAME
-      away = opponent parsed from "vs."
-    """
     df = read_csv_safe(paths.rest_days_stats_csv)
 
     team_col = _first_existing_col(df, ["TEAM NAME", "TEAM", "Team"])
@@ -252,13 +229,11 @@ def load_today_games_from_rest_days(paths: ProjectPaths) -> pd.DataFrame:
     # Use only "vs." as canonical home rows (dedup)
     home_rows = sub[sub[opp_col].str.lower().str.startswith("vs")].copy()
     if home_rows.empty:
-        # fallback: if only @ exists, infer games by pairing
         log("[WARN] No 'vs.' rows found; cannot reliably infer home/away. Returning empty.")
         return pd.DataFrame(columns=["date", "home_team", "away_team"])
 
     def parse_opp(s: str) -> str:
         s = s.strip()
-        # "vs. X" or "vs X"
         s = s.replace("vs.", "", 1).replace("vs", "", 1)
         return s.strip()
 
@@ -274,12 +249,6 @@ def load_today_games_from_rest_days(paths: ProjectPaths) -> pd.DataFrame:
 # Injury aggregation
 # -----------------------------
 def load_injury_counts(paths: ProjectPaths) -> pd.DataFrame:
-    """
-    latest_injury_team_status.csv is player-level with:
-      TEAM, PLAYER_NAME, inj_out, inj_questionable, inj_doubtful (0/1)
-    We aggregate per TEAM:
-      injury_count = count of players where (out|questionable|doubtful)=1
-    """
     try:
         df = read_csv_safe(paths.latest_injury_team_status_csv)
     except Exception as e:
@@ -315,48 +284,29 @@ def load_injury_counts(paths: ProjectPaths) -> pd.DataFrame:
 
 
 # -----------------------------
-# Feature builder (matching training naming)
+# Feature builder
 # -----------------------------
 def build_features_for_today(paths: ProjectPaths, games_today: pd.DataFrame) -> pd.DataFrame:
-    """
-    Build a row per game with columns matching training-style names:
-      - home_team_* from team_stats_raw
-      - away_team_* from team_stats_raw
-      - home_rest_* from rest_days_stats
-      - away_rest_* from rest_days_stats
-      - home_schedule_* from schedule_rest_days
-      - away_schedule_* from schedule_rest_days
-      - injury_count_home / injury_count_away
-    """
     if games_today.empty:
         return games_today.copy()
 
-    # --- Load sources
     team_stats = read_csv_safe(paths.team_stats_raw_csv)
     rest_stats = read_csv_safe(paths.rest_days_stats_csv)
     sched_stats = read_csv_safe(paths.schedule_rest_days_csv)
     inj_counts = load_injury_counts(paths)
 
-    # --- Identify team name column consistently (full name)
     team_teamcol = _first_existing_col(team_stats, ["TEAM", "TEAM NAME", "Team"])
     rest_teamcol = _first_existing_col(rest_stats, ["TEAM NAME", "TEAM", "Team"])
     sched_teamcol = _first_existing_col(sched_stats, ["TEAMS", "TEAM", "TEAM NAME", "Team"])
 
-    if team_teamcol is None:
-        raise ValueError("team_stats_raw must have TEAM column (full team name).")
-    if rest_teamcol is None:
-        raise ValueError("rest_days_stats must have TEAM NAME column (full team name).")
-    if sched_teamcol is None:
-        raise ValueError("schedule_rest_days must have TEAMS column (full team name).")
+    if team_teamcol is None or rest_teamcol is None or sched_teamcol is None:
+        raise ValueError("Team name columns missing in stats files.")
 
-    # --- Prepare numeric-only tables with sanitized column names
     def prep_numeric(df: pd.DataFrame, team_col: str) -> pd.DataFrame:
         out = df.copy()
         out[team_col] = out[team_col].astype(str).str.strip()
-        # keep numeric cols only
         num = out.select_dtypes(include=[np.number]).copy()
         num[team_col] = out[team_col]
-        # sanitize numeric col names (except key)
         rename_map = {c: _sanitize_stat_col(c) for c in num.columns if c != team_col}
         num = num.rename(columns=rename_map)
         return num
@@ -365,56 +315,112 @@ def build_features_for_today(paths: ProjectPaths, games_today: pd.DataFrame) -> 
     rest_num = prep_numeric(rest_stats, rest_teamcol)
     sched_num = prep_numeric(sched_stats, sched_teamcol)
 
-    # injury already aggregated
     if not inj_counts.empty:
         inj_counts = inj_counts.copy()
         inj_counts["TEAM"] = inj_counts["TEAM"].astype(str).str.strip()
 
-    # --- Merge per game
     base = games_today.copy()
     base["home_team"] = base["home_team"].astype(str).str.strip()
     base["away_team"] = base["away_team"].astype(str).str.strip()
 
-    # Team stats
     home_team = team_num.add_prefix("home_team_").rename(columns={f"home_team_{team_teamcol}": "home_team"})
     away_team = team_num.add_prefix("away_team_").rename(columns={f"away_team_{team_teamcol}": "away_team"})
     base = base.merge(home_team, on="home_team", how="left")
     base = base.merge(away_team, on="away_team", how="left")
 
-    # Rest stats
     home_rest = rest_num.add_prefix("home_rest_").rename(columns={f"home_rest_{rest_teamcol}": "home_team"})
     away_rest = rest_num.add_prefix("away_rest_").rename(columns={f"away_rest_{rest_teamcol}": "away_team"})
     base = base.merge(home_rest, on="home_team", how="left")
     base = base.merge(away_rest, on="away_team", how="left")
 
-    # Schedule rest-days distribution stats
     home_sched = sched_num.add_prefix("home_schedule_").rename(columns={f"home_schedule_{sched_teamcol}": "home_team"})
     away_sched = sched_num.add_prefix("away_schedule_").rename(columns={f"away_schedule_{sched_teamcol}": "away_team"})
     base = base.merge(home_sched, on="home_team", how="left")
     base = base.merge(away_sched, on="away_team", how="left")
 
-        # Injury counts (match training feature names)
     if not inj_counts.empty:
         inj_h = inj_counts.rename(columns={"TEAM": "home_team", "injury_count": "injury_count_home"}).copy()
         inj_a = inj_counts.rename(columns={"TEAM": "away_team", "injury_count": "injury_count_away"}).copy()
-
-        # avoid column-name collisions
+        
         for c in ["injury_count_home", "injury_count_away"]:
-            if c in base.columns:
-                base = base.drop(columns=[c])
+            if c in base.columns: base = base.drop(columns=[c])
 
         base = base.merge(inj_h, on="home_team", how="left")
         base = base.merge(inj_a, on="away_team", how="left")
 
-    # guarantee columns exist (no KeyError)
-    if "injury_count_home" not in base.columns:
-        base["injury_count_home"] = 0.0
-    if "injury_count_away" not in base.columns:
-        base["injury_count_away"] = 0.0
+    if "injury_count_home" not in base.columns: base["injury_count_home"] = 0.0
+    if "injury_count_away" not in base.columns: base["injury_count_away"] = 0.0
 
     base["injury_count_home"] = pd.to_numeric(base["injury_count_home"], errors="coerce").fillna(0.0)
     base["injury_count_away"] = pd.to_numeric(base["injury_count_away"], errors="coerce").fillna(0.0)
 
+    # === ADD MISSING FEATURES TO MATCH TRAINING ===
+    # Training expects 203 features, we only created 121
+    # Missing: gameId, date features, ELO, diff features, rolling features
+    
+    # 1) gameId (required by training)
+    if "gameId" not in base.columns:
+        base["gameId"] = base.index.astype(str)  # Temporary ID
+    
+    # 2) Date features (from game_date or date column)
+    if "game_date" not in base.columns and "date" in base.columns:
+        base["game_date"] = pd.to_datetime(base["date"], errors="coerce")
+    
+    if "game_date" in base.columns:
+        base["game_date"] = pd.to_datetime(base["game_date"], errors="coerce")
+        base["month"] = base["game_date"].dt.month
+        base["day_of_week"] = base["game_date"].dt.dayofweek
+        base["is_weekend"] = (base["day_of_week"] >= 5).astype(int)
+        base["is_playoff"] = 0  # Assume regular season for today's games
+    
+    # 3) Diff features (home - away)
+    def add_diff_features(df: pd.DataFrame, home_prefix: str, away_prefix: str, diff_prefix: str):
+        home_cols = [c for c in df.columns if c.startswith(home_prefix)]
+        for hc in home_cols:
+            suffix = hc[len(home_prefix):]
+            ac = away_prefix + suffix
+            if ac in df.columns:
+                h = pd.to_numeric(df[hc], errors="coerce")
+                a = pd.to_numeric(df[ac], errors="coerce")
+                df[diff_prefix + suffix] = h - a
+    
+    add_diff_features(base, "home_team_", "away_team_", "diff_team_")
+    add_diff_features(base, "home_rest_", "away_rest_", "diff_rest_")
+    add_diff_features(base, "home_schedule_", "away_schedule_", "diff_schedule_")
+    
+    # 4) ELO features (set to neutral/default values since we don't have historical data)
+    # Training uses base_rating=1500.0, so set both teams to 1500 for neutral prediction
+    base["home_elo_before"] = 1500.0
+    base["away_elo_before"] = 1500.0
+    base["diff_elo"] = 0.0  # Neutral ELO difference
+    
+    # 5) Rolling features (set to NaN - will be filled with train_median)
+    # Training has: home_roll_w5_*, home_roll_w10_*, away_roll_w5_*, away_roll_w10_*
+    # and diff_roll_w5_*, diff_roll_w10_*
+    # Since we don't have historical games, set to NaN (will be filled with train_median)
+    rolling_windows = [5, 10]
+    rolling_metrics = ["win_rate", "avg_score_diff", "avg_points_for", "avg_points_against"]
+    
+    for w in rolling_windows:
+        for metric in rolling_metrics:
+            # Home and away rolling features
+            base[f"home_roll_w{w}_{metric}"] = np.nan
+            base[f"away_roll_w{w}_{metric}"] = np.nan
+            # Diff rolling features (will be computed from home - away, but set to NaN for now)
+            base[f"diff_roll_w{w}_{metric}"] = np.nan
+    
+    # Compute diff_roll features from home - away (if both exist)
+    for w in rolling_windows:
+        for metric in rolling_metrics:
+            home_col = f"home_roll_w{w}_{metric}"
+            away_col = f"away_roll_w{w}_{metric}"
+            diff_col = f"diff_roll_w{w}_{metric}"
+            if home_col in base.columns and away_col in base.columns:
+                # Will be NaN since both are NaN, but structure is correct
+                base[diff_col] = base[home_col] - base[away_col]
+    
+    log(f"[INFO] Added missing features: gameId, date features, ELO (neutral), diff features, rolling (NaN)")
+    log(f"[INFO] Total features after additions: {len(base.columns)}")
 
     return base
 
@@ -423,164 +429,206 @@ def build_features_for_today(paths: ProjectPaths, games_today: pd.DataFrame) -> 
 # Model + transforms
 # -----------------------------
 def load_feature_cols(path: Path) -> List[str]:
-    if not path.exists():
-        raise FileNotFoundError(f"Missing feature_cols.json at: {path}")
-    with open(path, "r", encoding="utf-8") as f:
-        cols = json.load(f)
-    if not isinstance(cols, list) or not cols:
-        raise ValueError("feature_cols.json must be a non-empty list.")
-    return cols
-
+    if not path.exists(): raise FileNotFoundError(f"Missing {path}")
+    with open(path, "r", encoding="utf-8") as f: return json.load(f)
 
 def load_scaler(path: Path):
-    if joblib is None:
-        raise ImportError("joblib not installed. Install: pip install joblib")
-    if not path.exists():
-        raise FileNotFoundError(f"Missing scaler.joblib at: {path}")
+    if joblib is None: raise ImportError("joblib missing")
+    if not path.exists(): raise FileNotFoundError(f"Missing {path}")
     return joblib.load(path)
 
-
 def load_train_median(path: Path) -> Optional[pd.Series]:
-    if joblib is None:
-        return None
-    if not path.exists():
-        return None
+    if joblib is None or not path.exists(): return None
     med = joblib.load(path)
-    # could be Series or dict-like
     try:
-        if isinstance(med, pd.Series):
-            return med
-        if isinstance(med, dict):
-            return pd.Series(med)
-    except Exception:
-        pass
+        if isinstance(med, pd.Series): return med
+        if isinstance(med, dict): return pd.Series(med)
+    except: pass
     return None
 
-
-def load_mlp_model(path: Path):
-    if load_model is None:
-        raise ImportError("tensorflow is not available. Install: pip install tensorflow")
-    if not path.exists():
-        raise FileNotFoundError(f"Missing model file: {path}")
+def load_keras_model(path: Path):
+    if load_model is None: raise ImportError("tensorflow missing")
+    if not path.exists(): raise FileNotFoundError(f"Missing model: {path}")
     return load_model(str(path))
 
-
 def prepare_X(df_features: pd.DataFrame, feature_cols: List[str], scaler_obj, train_median: Optional[pd.Series]) -> np.ndarray:
-    # Align columns in one shot (prevents fragmentation + guarantees order)
     Xdf = df_features.reindex(columns=feature_cols)
-
-    # numeric coercion
+    
+    # Feature alignment check
+    missing_cols = set(feature_cols) - set(Xdf.columns)
+    extra_cols = set(Xdf.columns) - set(feature_cols)
+    if missing_cols:
+        log(f"[ERROR] Missing features: {list(missing_cols)[:10]}... (showing first 10)")
+    if extra_cols:
+        log(f"[WARN] Extra features (will be ignored): {list(extra_cols)[:10]}... (showing first 10)")
+    
+    # Check for potential home/away swaps in first few columns
+    if len(feature_cols) > 0:
+        first_cols = feature_cols[:5]
+        log(f"[DEBUG] First 5 feature columns: {first_cols}")
+        home_cols = [c for c in first_cols if 'home_' in c.lower()]
+        away_cols = [c for c in first_cols if 'away_' in c.lower()]
+        if home_cols:
+            log(f"[DEBUG] Sample home columns: {home_cols[:3]}")
+        if away_cols:
+            log(f"[DEBUG] Sample away columns: {away_cols[:3]}")
+    
     for c in Xdf.columns:
         if not pd.api.types.is_numeric_dtype(Xdf[c]):
             Xdf[c] = pd.to_numeric(Xdf[c], errors="coerce")
 
-    # fill NaNs with training median if available, else inference median, else 0
     if train_median is not None:
-        # align index
         med = train_median.reindex(feature_cols)
         Xdf = Xdf.fillna(med)
     else:
         med = Xdf.median(numeric_only=True)
         Xdf = Xdf.fillna(med).fillna(0.0)
 
-    # transform
     try:
         X = scaler_obj.transform(Xdf.values)
-    except Exception:
+    except:
         X = scaler_obj.transform(Xdf)
     return np.asarray(X, dtype=np.float32)
-
-
-def predict_win_prob_home(model, X: np.ndarray) -> np.ndarray:
-    preds = model.predict(X, verbose=0)
-    preds = np.asarray(preds)
-    if preds.ndim == 2 and preds.shape[1] == 2:
-        preds = preds[:, 1]
-    preds = preds.reshape(-1)
-    return np.clip(preds, 0.0, 1.0)
 
 
 # -----------------------------
 # Main
 # -----------------------------
 def main():
-    parser = argparse.ArgumentParser(description="Daily NBA predictions (today games) - NO referee features.")
-    parser.add_argument("--date", type=str, default=None, help="Override date YYYY-MM-DD (output only).")
-    parser.add_argument("--run_current_data_nb", type=int, default=1, help="Run 01_current_data_download.ipynb (1/0).")
-    parser.add_argument("--run_injury_download", type=int, default=1, help="Run src/data/download_injury_report.py (1/0).")
+    parser = argparse.ArgumentParser(description="Daily NBA predictions (Classifier + Regressor)")
+    parser.add_argument("--date", type=str, default=None, help="Override date YYYY-MM-DD")
+    parser.add_argument("--run_current_data_nb", type=int, default=1, help="Run 01 notebook (1/0)")
+    parser.add_argument("--run_injury_download", type=int, default=1, help="Run injury script (1/0)")
 
     args = parser.parse_args()
-
     paths = resolve_paths()
     ensure_dir(paths.data_processed_dir)
-
     run_date = today_str(args.date)
-    log(f"[INFO] Date = {run_date}")
-    log(f"[INFO] Repo root = {paths.repo_root}")
+    log(f"[INFO] Running for date: {run_date}")
 
-    # 1) Refresh current data CSVs
-    if args.run_current_data_nb == 1:
-        if not paths.nb_current_data.exists():
-            raise FileNotFoundError(f"Notebook not found: {paths.nb_current_data}")
+    # 1) Refresh Data
+    if args.run_current_data_nb == 1 and paths.nb_current_data.exists():
         try:
             run_notebook_nbconvert(paths.nb_current_data, cwd=paths.repo_root)
         except Exception as e:
-            # If outputs exist, continue
-            required = [paths.rest_days_stats_csv, paths.schedule_rest_days_csv, paths.player_stats_raw_csv, paths.team_stats_raw_csv]
-            missing = [p for p in required if not p.exists()]
-            if missing:
-                raise RuntimeError(f"01_current_data_download failed and outputs missing: {missing}. Reason: {e}")
-            log(f"[WARN] 01_current_data_download failed but outputs exist; continuing. Reason: {e}")
+            log(f"[WARN] Data refresh failed: {e}")
 
-    # 2) Refresh injury report (player-level CSVs)
-    if args.run_injury_download == 1:
-        if paths.download_injury_script.exists():
-            try:
-                run_subprocess([sys.executable, str(paths.download_injury_script)], cwd=paths.repo_root)
-            except Exception as e:
-                log(f"[WARN] Injury download failed; continuing without refreshed injury. Reason: {e}")
-        else:
-            log("[WARN] Injury download script not found; skipping.")
+    if args.run_injury_download == 1 and paths.download_injury_script.exists():
+        try:
+            run_subprocess([sys.executable, str(paths.download_injury_script)], cwd=paths.repo_root)
+        except Exception as e:
+            log(f"[WARN] Injury download failed: {e}")
 
-    # 3) Today games (from rest_days_stats OPPONENT TODAY)
+    # 2) Load Today's Games
     games_today = load_today_games_from_rest_days(paths)
     if games_today.empty:
-        log("[WARN] No games detected for today. Writing empty predictions.")
-        out = pd.DataFrame(columns=["date", "home_team", "away_team", "win_prob_home", "predicted_winner"])
-        out.to_csv(paths.predictions_today_csv, index=False)
-        log(f"[OK] Wrote: {paths.predictions_today_csv}")
+        log("[WARN] No games found today. Exiting.")
         return
-
-    # set date for output consistency
     games_today["date"] = run_date
 
-    # 4) Build features matching training naming
+    # 3) Build Features
     features_df = build_features_for_today(paths, games_today)
+    
+    # Log feature creation summary
+    log(f"[INFO] Created {len(features_df.columns)} features from build_features_for_today")
+    home_cols = [c for c in features_df.columns if 'home_' in c.lower()]
+    away_cols = [c for c in features_df.columns if 'away_' in c.lower()]
+    log(f"[INFO] Home columns: {len(home_cols)}, Away columns: {len(away_cols)}")
 
-    # 5) Load training artifacts
+    # 4) Load Artifacts (Models + Scalers)
     feature_cols = load_feature_cols(paths.feature_cols_json)
-    scaler_obj = load_scaler(paths.scaler_joblib)
+    log(f"[INFO] Training expects {len(feature_cols)} features")
+    
+    scaler_input = load_scaler(paths.scaler_joblib)
+    
+    # Target Scaler: Eğer yoksa (eski modelse) None döner, hata vermez ama skorlar ham kalır
+    try:
+        scaler_target = load_scaler(paths.scaler_target_joblib)
+    except FileNotFoundError:
+        log("[WARN] Target scaler not found. Predicted scores might be raw (scaled)!")
+        scaler_target = None
+
     train_median = load_train_median(paths.train_median_joblib)
-    model = load_mlp_model(paths.mlp_model_h5)
+    
+    clf_model = load_keras_model(paths.mlp_model_clf)
+    reg_model = load_keras_model(paths.mlp_model_reg)
 
-    # 6) Prepare X
-    X = prepare_X(features_df, feature_cols, scaler_obj, train_median)
+    # 5) Prepare Input
+    X = prepare_X(features_df, feature_cols, scaler_input, train_median)
 
-    # 7) Predict
-    win_prob_home = predict_win_prob_home(model, X)
+    # 6) PREDICT CLASSIFIER (Win Prob)
+    win_probs = clf_model.predict(X, verbose=0)
+    if win_probs.ndim == 2 and win_probs.shape[1] == 2:
+        win_probs = win_probs[:, 1]
+    win_probs = win_probs.reshape(-1)
+    win_probs = np.clip(win_probs, 0.0, 1.0)
 
-    # 8) Output
+    # 7) PREDICT REGRESSOR (Score Diff)
+    score_diffs_scaled = reg_model.predict(X, verbose=0).reshape(-1, 1)
+    
+    # DEBUG: Log raw scaled predictions
+    log(f"[DEBUG] Raw scaled predictions (first 3): {score_diffs_scaled.flatten()[:3]}")
+    if scaler_target is not None:
+        log(f"[DEBUG] Scaler mean={scaler_target.mean_[0]:.2f}, scale={scaler_target.scale_[0]:.2f}")
+        log(f"[DEBUG] Mean scaled prediction: {np.mean(score_diffs_scaled):.4f}")
+    
+    # Inverse Transform (CRITICAL STEP)
+    if scaler_target is not None:
+        score_diffs_real = scaler_target.inverse_transform(score_diffs_scaled).reshape(-1)
+    else:
+        score_diffs_real = score_diffs_scaled.reshape(-1)
+    
+    # DEBUG: Log inverse transformed predictions
+    log(f"[DEBUG] Inverse transformed predictions (first 3): {score_diffs_real[:3]}")
+    log(f"[DEBUG] Mean inverse transformed: {np.mean(score_diffs_real):.2f}")
+    
+    # Sanity check for inverted predictions
+    if np.mean(score_diffs_real) < -10:
+        log(f"[WARN] Mean prediction is very negative: {np.mean(score_diffs_real):.2f}")
+        log(f"[WARN] This suggests model inversion or feature mismatch")
+        log(f"[WARN] Classifier mean win prob: {np.mean(win_probs):.2f}")
+        if np.mean(win_probs) > 0.5 and np.mean(score_diffs_real) < 0:
+            log(f"[ERROR] CONFLICT: Classifier predicts home favorite but regressor predicts negative diff!")
+
+    # 8) Output Table
     out = pd.DataFrame({
-        "date": pd.to_datetime(features_df["date"], errors="coerce").dt.strftime("%Y-%m-%d").fillna(run_date),
-        "home_team": features_df["home_team"].astype(str),
-        "away_team": features_df["away_team"].astype(str),
-        "win_prob_home": win_prob_home.astype(float),
+        "Date": games_today["date"],
+        "Home": features_df["home_team"],
+        "Away": features_df["away_team"],
+        "Home Win %": (win_probs * 100).round(1),
+        "Pred Diff": np.round(score_diffs_real, 1)
     })
-    out["predicted_winner"] = np.where(out["win_prob_home"] >= 0.5, out["home_team"], out["away_team"])
-    out["model_used"] = paths.mlp_model_h5.name
 
+    # Logic for "Pick"
+    def get_pick(row):
+        prob = row["Home Win %"]
+        diff = row["Pred Diff"]
+        
+        # Classifier Prediction
+        winner_clf = row["Home"] if prob >= 50 else row["Away"]
+        conf_clf = "High" if (prob > 60 or prob < 40) else "Low"
+        
+        # Regressor Prediction
+        winner_reg = row["Home"] if diff > 0 else row["Away"]
+        
+        # Consensus
+        if winner_clf == winner_reg:
+            return f"{winner_clf} (Strong)" if conf_clf == "High" else f"{winner_clf} (Lean)"
+        else:
+            return "CONFLICT (Risky)"
+
+    out["Pick"] = out.apply(get_pick, axis=1)
+
+    # Print nicely to console
+    print("\n" + "="*60)
+    print(f"PREDICTIONS FOR {run_date}")
+    print("="*60)
+    print(out.to_string(index=False))
+    print("="*60 + "\n")
+
+    # Save CSV
     out.to_csv(paths.predictions_today_csv, index=False)
-    log(f"[OK] Wrote: {paths.predictions_today_csv} (rows={len(out)})")
+    log(f"[OK] Saved to: {paths.predictions_today_csv}")
 
 
 if __name__ == "__main__":
