@@ -310,6 +310,27 @@ def write_metrics_json(path: str, obj: Dict) -> None:
         json.dump(obj, f, indent=2, ensure_ascii=False)
 
 
+def compute_recency_weights(df: pd.DataFrame, season_col: str = "season_year", alpha: float = 1.0) -> np.ndarray:
+    """
+    Daha yeni sezonlara daha yüksek ağırlık ver. Linear scale:
+      w = 1 + alpha * (season - min) / (max - min + eps)
+    """
+    if season_col not in df.columns:
+        return np.ones(len(df), dtype=np.float32)
+    seasons_raw = df[season_col].astype(str)
+    # '2025-26' gibi değerlerden ilk 4 haneyi çek
+    seasons_num = seasons_raw.str.extract(r"(\d{4})")[0]
+    seasons = pd.to_numeric(seasons_num, errors="coerce").values
+    s_min = np.nanmin(seasons)
+    s_max = np.nanmax(seasons)
+    denom = (s_max - s_min) if (s_max - s_min) != 0 else 1.0
+    weights = 1.0 + alpha * (seasons - s_min) / denom
+    # NaN sezonlar için 1.0
+    weights = np.where(np.isnan(weights), 1.0, weights)
+    print(f"[INFO] Recency weights: min={weights.min():.3f}, max={weights.max():.3f}, alpha={alpha}")
+    return weights.astype(np.float32)
+
+
 def main():
     set_global_seed(RANDOM_SEED)
     ensure_dirs()
@@ -344,6 +365,9 @@ def main():
     y_val   = val["home_team_win"].values.astype(int)
     y_test  = test["home_team_win"].values.astype(int)
 
+    # Sample weights (recent season ağırlığı)
+    w_train = compute_recency_weights(train, season_col="season_year", alpha=1.0)
+
     clf_variants = [
         {"name": "MLP_C1", "hidden_units": [256, 128, 64], "dropout": 0.2, "batchnorm": False, "lr": 1e-3},
         {"name": "MLP_C2", "hidden_units": [128, 64],      "dropout": 0.0, "batchnorm": False, "lr": 1e-3},
@@ -369,6 +393,7 @@ def main():
             validation_data=(X_val, y_val),
             epochs=200,
             batch_size=256,
+            sample_weight=w_train,
             callbacks=callbacks,
             verbose=2
         )
@@ -402,6 +427,7 @@ def main():
     y_train_r = train["score_diff"].values.astype(float)
     y_val_r   = val["score_diff"].values.astype(float)
     y_test_r  = test["score_diff"].values.astype(float)
+    w_train_r = w_train  # aynı recency ağırlığı
 
     reg_variants = [
         {"name": "MLP_R1", "hidden_units": [256, 128, 64], "dropout": 0.1, "batchnorm": False, "lr": 1e-3, 
@@ -428,6 +454,7 @@ def main():
             validation_data=(X_val, y_val_r),
             epochs=200,
             batch_size=256,
+            sample_weight=w_train_r,
             callbacks=callbacks,
             verbose=2
         )
