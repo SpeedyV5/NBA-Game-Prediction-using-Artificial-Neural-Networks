@@ -1,0 +1,38 @@
+{
+  "classifier": {
+    "max_depth": 4,
+    "learning_rate": 0.004425802294712492,
+    "n_estimators": 238,
+    "subsample": 0.6369580673702258,
+    "colsample_bytree": 0.8407724633453575,
+    "scale_pos_weight": 1.0992757205589279,
+    "min_child_weight": 9,
+    "gamma": 0.14514538344890465,
+    "reg_alpha": 0.9950662768232273,
+    "reg_lambda": 0.4497153544842941,
+    "objective": "binary:logistic",
+    "eval_metric": "auc",
+    "random_state": 30,
+    "n_jobs": -1,
+    "verbosity": 1
+  },
+  "regressor": {
+    "max_depth": 4,
+    "learning_rate": 0.004425802294712492,
+    "n_estimators": 238,
+    "subsample": 0.6369580673702258,
+    "colsample_bytree": 0.8407724633453575,
+    "min_child_weight": 9,
+    "gamma": 0.14514538344890465,
+    "reg_alpha": 0.9950662768232273,
+    "reg_lambda": 0.4497153544842941,
+    "objective": "reg:squarederror",
+    "eval_metric": "rmse",
+    "random_state": 30,
+    "n_jobs": -1,
+    "verbosity": 1
+  },
+  "best_auc": 0.6878632985417455,
+  "n_trials": 50,
+  "seed": 30
+}

@@ -1,0 +1,104 @@
+================================================================================
+NBA GAME PREDICTION - FINAL PROJECT SUMMARY
+================================================================================
+
+Project: NBA Game Prediction using Artificial Neural Networks
+Course: CENG 481
+
+================================================================================
+MODEL LEADERBOARD
+================================================================================
+
+Rank  Model                          Test AUC     Test MAE    
+--------------------------------------------------------------------------------
+1     Baseline GBM                   0.7176       10.04       
+2     Ensemble (Soft Voting)         0.6938       10.27       
+3     XGBoost (Tuned)                0.6932       10.33       
+4     MLP Classifier                 0.6918       10.27       
+5     XGBoost (Baseline)             0.6881       10.28       
+
+================================================================================
+BEST METRICS ACHIEVED
+================================================================================
+
+Best Classification AUC: 0.7176
+Best Regression MAE:     10.04
+
+WINNER: Baseline GBM (GradientBoostingClassifier with sklearn defaults)
+
+================================================================================
+TOP 5 MOST IMPORTANT FEATURES
+================================================================================
+
+1. diff_elo                                 Importance: 0.6020
+2. diff_roll_w10_avg_score_diff             Importance: 0.0566
+3. home_elo_before                          Importance: 0.0238
+4. away_roll_w5_avg_score_diff              Importance: 0.0194
+5. home_roll_w10_avg_score_diff             Importance: 0.0172
+
+================================================================================
+ANALYSIS & CONCLUSIONS
+================================================================================
+
+Why Baseline GBM Outperformed Complex Models:
+
+1. ROBUSTNESS vs OVERFITTING:
+   - The Baseline GBM used sklearn default parameters, which are well-tuned
+     for general-purpose use. These defaults include conservative settings
+     (e.g., max_depth=3, learning_rate=0.1) that prevent overfitting.
+   - Complex models (MLP with 512-256-128-64 layers, tuned XGBoost) may have
+     overfit to training patterns that don't generalize to test data.
+
+2. FEATURE UTILIZATION:
+   - Baseline GBM used all 203 features without aggressive feature selection.
+   - Tree-based models (GBM) naturally perform feature selection through
+     splitting, making them robust to noisy features.
+   - MLP used only 50 features (after RandomForest selection), potentially
+     losing important signal.
+
+3. MODEL SIMPLICITY:
+   - Gradient Boosting is inherently well-suited for tabular data.
+   - The default parameters strike a good balance between bias and variance.
+   - Neural networks require more hyperparameter tuning and may struggle
+     with the limited dataset size (~17K samples) relative to model complexity.
+
+4. REGRESSION PERFORMANCE:
+   - All models converged to ~10.0 MAE, suggesting this may be a fundamental
+     limit of the current feature set for predicting score differences.
+   - Score differences in NBA games have high variance, making precise
+     prediction challenging even with good features.
+
+5. ENSEMBLE FAILURE:
+   - The ensemble (weighted average of Baseline, MLP, XGBoost) failed to
+     beat the Baseline alone (0.694 vs 0.717 AUC).
+   - This suggests the other models' predictions were not complementary
+     enough to improve upon the champion model.
+   - The Baseline's predictions may have already captured most of the
+     learnable signal, leaving little room for improvement via ensembling.
+
+================================================================================
+RECOMMENDATIONS FOR FUTURE WORK
+================================================================================
+
+1. Feature Engineering:
+   - Focus on creating more predictive features based on the top 5 identified
+     important features.
+   - Consider domain-specific features (player matchups, recent head-to-head,
+     rest days, travel distance, etc.).
+
+2. Data Collection:
+   - Expand dataset with more historical seasons.
+   - Include real-time injury data for inference-time adjustments.
+
+3. Model Improvements:
+   - Try LightGBM or CatBoost as alternatives to XGBoost.
+   - Experiment with stacking instead of simple weighted averaging.
+   - Consider time-series aware models if temporal patterns are important.
+
+4. Hyperparameter Tuning:
+   - Use cross-validation instead of single validation set.
+   - Apply Bayesian optimization (Optuna) more extensively.
+
+================================================================================
+END OF REPORT
+================================================================================

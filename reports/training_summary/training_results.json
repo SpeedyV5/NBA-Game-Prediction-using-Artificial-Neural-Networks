@@ -1,0 +1,55 @@
+{
+  "training_session": "2025-12-26T18:02:18.510804",
+  "models_trained": [
+    {
+      "model": "baseline",
+      "description": "Baseline GBM (Champion Model)",
+      "log_file": "training_logs/baseline_training.log",
+      "file_size_kb": 0.7,
+      "metrics": {
+        "test_auc": 0.6911877131206179,
+        "test_mae": 10.209238773670249,
+        "completed": true
+      }
+    },
+    {
+      "model": "xgboost_tuned",
+      "description": "XGBoost with Optuna Optimization",
+      "log_file": "training_logs/xgboost_tuned_training.log",
+      "file_size_kb": 42.3,
+      "metrics": {
+        "test_auc": 0.6932,
+        "test_mae": 10.3333,
+        "completed": true
+      }
+    },
+    {
+      "model": "mlp",
+      "description": "MLP with Feature Selection & Class Weights",
+      "log_file": "training_logs/mlp_training.log",
+      "file_size_kb": 71.4,
+      "metrics": {
+        "test_auc": 0.6918,
+        "test_mae": 10.2668,
+        "completed": true
+      }
+    }
+  ],
+  "leaderboard": [
+    {
+      "model": "xgboost_tuned",
+      "test_auc": 0.6932,
+      "test_mae": 10.3333
+    },
+    {
+      "model": "mlp",
+      "test_auc": 0.6918,
+      "test_mae": 10.2668
+    },
+    {
+      "model": "baseline",
+      "test_auc": 0.6911877131206179,
+      "test_mae": 10.209238773670249
+    }
+  ]
+}

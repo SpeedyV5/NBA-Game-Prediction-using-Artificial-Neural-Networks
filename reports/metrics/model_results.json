@@ -2,58 +2,65 @@
   "mlp_classifier": {
     "seed": 30,
     "scaler": "RobustScaler(train_fit_only)",
-    "features_used": 203,
+    "features_used": 50,
+    "feature_selection": "RandomForest (top 50)",
+    "class_weights": {
+      "0": 1.1634141893124201,
+      "1": 0.8768384879725086
+    },
     "best_hyperparams": {
-      "name": "MLP_C1",
+      "name": "MLP_C3",
       "hidden_units": [
+        512,
         256,
         128,
         64
       ],
-      "dropout": 0.2,
-      "batchnorm": false,
+      "dropout": 0.4,
+      "input_dropout": 0.15,
+      "batchnorm": true,
       "lr": 0.001
     },
     "val": {
-      "accuracy": 0.6635514018691588,
-      "f1": 0.7294046903187011,
-      "roc_auc": 0.6978756108872093,
-      "logloss": 0.6253714126738338,
-      "brier": 0.21744704246520996,
+      "accuracy": 0.6247256766642283,
+      "f1": 0.6462068965517241,
+      "roc_auc": 0.6820598724797367,
+      "logloss": 0.641441589129382,
+      "brier": 0.22541846334934235,
       "confusion_matrix": [
         [
-          562,
-          592
+          771,
+          371
         ],
         [
-          308,
-          1213
+          655,
+          937
         ]
       ]
     },
     "test": {
-      "accuracy": 0.6504672897196262,
-      "f1": 0.7208121827411168,
-      "roc_auc": 0.6880352587721785,
-      "logloss": 0.6325374066822866,
-      "brier": 0.2210000902414322,
+      "accuracy": 0.6316752011704463,
+      "f1": 0.6425275115370962,
+      "roc_auc": 0.6917734964031761,
+      "logloss": 0.6356013618357808,
+      "brier": 0.22281189262866974,
       "confusion_matrix": [
         [
-          533,
-          647
+          822,
+          355
         ],
         [
-          288,
-          1207
+          652,
+          905
         ]
       ]
     },
     "model_path": "models/mlp_classifier_best.h5",
     "predictions_path": "data_processed/predictions_mlp.csv",
     "figures": {
-      "train_loss": "reports/figures/mlp\\classifier\\train_MLP_C1_loss.png",
-      "train_accuracy": "reports/figures/mlp\\classifier\\train_MLP_C1_accuracy.png",
-      "train_auc": "reports/figures/mlp\\classifier\\train_MLP_C1_auc.png",
+      "train_loss": "reports/figures/mlp\\classifier\\train_MLP_C3_loss.png",
+      "train_accuracy": "reports/figures/mlp\\classifier\\train_MLP_C3_accuracy.png",
+      "train_auc": "reports/figures/mlp\\classifier\\train_MLP_C3_auc.png",
       "test_confusion_matrix": "reports/figures/mlp\\classifier\\test_confusion_matrix.png",
       "test_roc": "reports/figures/mlp\\classifier\\test_roc.png",
       "test_calibration": "reports/figures/mlp\\classifier\\test_calibration.png"
@@ -63,33 +70,36 @@
     "seed": 30,
     "scaler": "RobustScaler(train_fit_only)",
     "target_scaler": "StandardScaler(train_fit_only)",
-    "features_used": 203,
+    "features_used": 50,
+    "feature_selection": "RandomForest (top 50)",
     "best_hyperparams": {
-      "name": "MLP_R1",
+      "name": "MLP_R2",
       "hidden_units": [
         256,
         128,
         64
       ],
-      "dropout": 0.1,
-      "batchnorm": false,
+      "dropout": 0.3,
+      "input_dropout": 0.1,
+      "batchnorm": true,
       "lr": 0.001,
-      "loss": "mse",
-      "loss_name": "mse"
+      "loss": "huber",
+      "huber_delta": 2.0,
+      "loss_name": "huber(delta=2.0)"
     },
     "val": {
-      "mae": 10.31185992634613,
-      "rmse": 13.0162107393241
+      "mae": 10.101862265711382,
+      "rmse": 12.954381457068047
     },
     "test": {
-      "mae": 10.404332806837585,
-      "rmse": 13.234645992738608
+      "mae": 10.266848103748941,
+      "rmse": 13.16070300551842
     },
     "model_path": "models/mlp_regressor_best.h5",
     "predictions_path": "data_processed/predictions_mlp.csv",
     "figures": {
       "test_scatter": "reports/figures/mlp\\regressor\\test_scatter.png",
-      "train_loss": "reports/figures/mlp\\regressor\\train_MLP_R1_loss.png"
+      "train_loss": "reports/figures/mlp\\regressor\\train_MLP_R2_loss.png"
     }
   },
   "baseline_gbm": {
@@ -101,48 +111,48 @@
     },
     "val": {
       "classification": {
-        "accuracy": 0.6418894177956792,
-        "f1": 0.7027355623100304,
-        "roc_auc": 0.6914296463995906,
-        "logloss": 0.6316161091359075,
-        "brier": 0.2206550066534673,
+        "accuracy": 0.6378931967812729,
+        "f1": 0.7062314540059347,
+        "roc_auc": 0.6792764171118288,
+        "logloss": 0.6327111965544125,
+        "brier": 0.22107107726546438,
         "confusion_matrix": [
           [
-            597,
-            627
+            554,
+            588
           ],
           [
-            351,
-            1156
+            402,
+            1190
           ]
         ]
       },
       "regression": {
-        "mae": 9.96514155517021,
-        "rmse": 12.78671209615828
+        "mae": 10.07236674558276,
+        "rmse": 12.919275633742599
       }
     },
     "test": {
       "classification": {
-        "accuracy": 0.66800878477306,
-        "f1": 0.7303003270889087,
-        "roc_auc": 0.7175675342567056,
-        "logloss": 0.6099429249141726,
-        "brier": 0.21062016780190723,
+        "accuracy": 0.648134601316752,
+        "f1": 0.7074209245742092,
+        "roc_auc": 0.6911877131206179,
+        "logloss": 0.6270994890692748,
+        "brier": 0.2188685331837891,
         "confusion_matrix": [
           [
-            597,
+            609,
             568
           ],
           [
-            339,
-            1228
+            394,
+            1163
           ]
         ]
       },
       "regression": {
-        "mae": 10.036017515432462,
-        "rmse": 12.86597925872007
+        "mae": 10.209238773670249,
+        "rmse": 13.09616068552504
       }
     },
     "predictions_path": "data_processed/predictions_baseline.csv",
@@ -214,6 +224,197 @@
         "roc": "reports\\figures\\sequence\\classifier\\test_lstm_N10_roc.png",
         "calibration": "reports\\figures\\sequence\\classifier\\test_lstm_N10_calibration.png"
       }
+    }
+  },
+  "xgb_classifier": {
+    "seed": 30,
+    "features_used": 205,
+    "hyperparams": {
+      "objective": "binary:logistic",
+      "eval_metric": "auc",
+      "max_depth": 6,
+      "learning_rate": 0.05,
+      "n_estimators": 500,
+      "subsample": 0.8,
+      "colsample_bytree": 0.8,
+      "min_child_weight": 3,
+      "gamma": 0.1,
+      "reg_alpha": 0.1,
+      "reg_lambda": 1.0,
+      "random_state": 30,
+      "n_jobs": -1,
+      "verbosity": 1,
+      "scale_pos_weight": 0.7536769759450171
+    },
+    "val": {
+      "accuracy": 0.6283833211411851,
+      "f1": 0.6637988087359364,
+      "roc_auc": 0.6783595076960988,
+      "logloss": 0.6425784408734456,
+      "brier": 0.22560051083564758,
+      "confusion_matrix": [
+        [
+          715,
+          427
+        ],
+        [
+          589,
+          1003
+        ]
+      ]
+    },
+    "test": {
+      "accuracy": 0.6324067300658376,
+      "f1": 0.6552315608919382,
+      "roc_auc": 0.688103551860237,
+      "logloss": 0.6358750919049284,
+      "brier": 0.22287362813949585,
+      "confusion_matrix": [
+        [
+          774,
+          403
+        ],
+        [
+          602,
+          955
+        ]
+      ]
+    },
+    "model_path": "models/xgb_classifier.json",
+    "predictions_path": "data_processed/predictions_xgb.csv",
+    "figures": {
+      "test_confusion_matrix": "reports/figures/xgboost\\classifier\\test_confusion_matrix.png",
+      "test_roc": "reports/figures/xgboost\\classifier\\test_roc.png",
+      "test_calibration": "reports/figures/xgboost\\classifier\\test_calibration.png"
+    }
+  },
+  "xgb_regressor": {
+    "seed": 30,
+    "features_used": 205,
+    "hyperparams": {
+      "objective": "reg:squarederror",
+      "eval_metric": "rmse",
+      "max_depth": 6,
+      "learning_rate": 0.05,
+      "n_estimators": 500,
+      "subsample": 0.8,
+      "colsample_bytree": 0.8,
+      "min_child_weight": 3,
+      "gamma": 0.1,
+      "reg_alpha": 0.1,
+      "reg_lambda": 1.0,
+      "random_state": 30,
+      "n_jobs": -1,
+      "verbosity": 1
+    },
+    "val": {
+      "mae": 10.118207277268619,
+      "rmse": 12.963409641310415
+    },
+    "test": {
+      "mae": 10.28032718216435,
+      "rmse": 13.135480020137722
+    },
+    "model_path": "models/xgb_regressor.json",
+    "predictions_path": "data_processed/predictions_xgb.csv",
+    "figures": {
+      "test_scatter": "reports/figures/xgboost\\regressor\\test_scatter.png"
+    }
+  },
+  "xgb_classifier_tuned": {
+    "seed": 30,
+    "features_used": 205,
+    "n_trials": 50,
+    "best_hyperparams": {
+      "max_depth": 4,
+      "learning_rate": 0.004425802294712492,
+      "n_estimators": 238,
+      "subsample": 0.6369580673702258,
+      "colsample_bytree": 0.8407724633453575,
+      "scale_pos_weight": 1.0992757205589279,
+      "min_child_weight": 9,
+      "gamma": 0.14514538344890465,
+      "reg_alpha": 0.9950662768232273,
+      "reg_lambda": 0.4497153544842941,
+      "objective": "binary:logistic",
+      "eval_metric": "auc",
+      "random_state": 30,
+      "n_jobs": -1,
+      "verbosity": 1
+    },
+    "val": {
+      "accuracy": 0.5822970007315289,
+      "f1": 0.7360147942672215,
+      "roc_auc": 0.6878632985417455,
+      "logloss": 0.6665888811179086,
+      "brier": 0.23697122931480408,
+      "confusion_matrix": [
+        [
+          0,
+          1142
+        ],
+        [
+          0,
+          1592
+        ]
+      ]
+    },
+    "test": {
+      "accuracy": 0.56949524506218,
+      "f1": 0.725704963877884,
+      "roc_auc": 0.6932009850544776,
+      "logloss": 0.6704044114290861,
+      "brier": 0.23885737359523773,
+      "confusion_matrix": [
+        [
+          0,
+          1177
+        ],
+        [
+          0,
+          1557
+        ]
+      ]
+    },
+    "model_path": "models/xgb_classifier_tuned.json",
+    "predictions_path": "data_processed/predictions_xgboost_tuned.csv",
+    "figures": {
+      "test_confusion_matrix": "reports/figures/xgboost_tuned\\classifier\\test_confusion_matrix.png",
+      "test_roc": "reports/figures/xgboost_tuned\\classifier\\test_roc.png",
+      "test_calibration": "reports/figures/xgboost_tuned\\classifier\\test_calibration.png"
+    }
+  },
+  "xgb_regressor_tuned": {
+    "seed": 30,
+    "features_used": 205,
+    "hyperparams": {
+      "max_depth": 4,
+      "learning_rate": 0.004425802294712492,
+      "n_estimators": 238,
+      "subsample": 0.6369580673702258,
+      "colsample_bytree": 0.8407724633453575,
+      "min_child_weight": 9,
+      "gamma": 0.14514538344890465,
+      "reg_alpha": 0.9950662768232273,
+      "reg_lambda": 0.4497153544842941,
+      "objective": "reg:squarederror",
+      "eval_metric": "rmse",
+      "random_state": 30,
+      "n_jobs": -1,
+      "verbosity": 1
+    },
+    "val": {
+      "mae": 10.167385753154658,
+      "rmse": 12.986216539610997
+    },
+    "test": {
+      "mae": 10.33334837340608,
+      "rmse": 13.17267316994846
+    },
+    "model_path": "models/xgb_regressor_tuned.json",
+    "predictions_path": "data_processed/predictions_xgboost_tuned.csv",
+    "figures": {
+      "test_scatter": "reports/figures/xgboost_tuned\\regressor\\test_scatter.png"
     }
   }
 }

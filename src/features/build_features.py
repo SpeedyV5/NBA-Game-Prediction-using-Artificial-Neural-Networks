@@ -326,7 +326,7 @@ def build_model_dataset(
         df,
         base_rating=1500.0,
         k_factor=20.0,
-        home_advantage=0.0,  # istersen 50-100 arası deneyebilirsin
+        home_advantage=69.0,  # NBA home-court advantage (~3 points)
     )
 
     # rolling features

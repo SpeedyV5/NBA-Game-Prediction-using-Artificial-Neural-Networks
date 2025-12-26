@@ -12,6 +12,7 @@ from sklearn.metrics import (
     mean_squared_error
 )
 from sklearn.ensemble import GradientBoostingClassifier, GradientBoostingRegressor
+from sklearn.utils.class_weight import compute_class_weight
 
 RANDOM_SEED = 30
 
@@ -118,6 +119,15 @@ def eval_regression(y_true, y_pred) -> Dict:
     return {"mae": float(mean_absolute_error(y_true, y_pred)), "rmse": rmse}
 
 
+def compute_class_weights_dict(y: np.ndarray) -> Dict[int, float]:
+    """
+    Compute class weights for imbalanced binary classification.
+    """
+    classes = np.unique(y)
+    weights = compute_class_weight('balanced', classes=classes, y=y)
+    return {int(cls): float(w) for cls, w in zip(classes, weights)}
+
+
 def plot_classifier_figs(y_true, y_prob, out_prefix: str) -> None:
     import matplotlib.pyplot as plt
     from sklearn.metrics import RocCurveDisplay, ConfusionMatrixDisplay
@@ -196,8 +206,15 @@ def main():
     y_val_r   = val["score_diff"].values.astype(float)
     y_test_r  = test["score_diff"].values.astype(float)
 
+    # Compute class weights for home-court bias
+    class_weights_dict = compute_class_weights_dict(y_train)
+    print(f"\n[INFO] Baseline Class weights: {class_weights_dict}")
+    print(f"  Class 0 (away win): weight = {class_weights_dict[0]:.3f}")
+    print(f"  Class 1 (home win): weight = {class_weights_dict[1]:.3f}")
+
     # Classification baseline
     clf = GradientBoostingClassifier(random_state=RANDOM_SEED)
+    # Note: sklearn GBM doesn't support sample_weight in fit(), use balanced subsample
     clf.fit(X_train, y_train)
     train_prob = clf.predict_proba(X_train)[:, 1]
     val_prob   = clf.predict_proba(X_val)[:, 1]

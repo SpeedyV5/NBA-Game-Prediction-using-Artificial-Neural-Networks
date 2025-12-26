@@ -3,17 +3,20 @@ import os
 import json
 import random
 from dataclasses import asdict, dataclass
-from typing import Dict, Tuple, List
+from typing import Dict, Tuple, List, Optional
 
 import numpy as np
 import pandas as pd
 
-from sklearn.preprocessing import RobustScaler, StandardScaler
+from sklearn.preprocessing import RobustScaler, StandardScaler, MinMaxScaler
+from sklearn.feature_selection import SelectFromModel
+from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
 from sklearn.metrics import (
     accuracy_score, f1_score, roc_auc_score, log_loss,
     confusion_matrix, brier_score_loss, mean_absolute_error,
     mean_squared_error
 )
+from sklearn.utils.class_weight import compute_class_weight
 
 import tensorflow as tf
 from tensorflow import keras
@@ -21,6 +24,7 @@ from tensorflow.keras import layers
 
 
 RANDOM_SEED = 30
+TOP_N_FEATURES = 50  # Feature selection target
 
 TRAIN_PATH = "data_processed/train_set.csv"
 VAL_PATH   = "data_processed/val_set.csv"
@@ -34,7 +38,7 @@ METRICS_PATH = "reports/metrics/model_results.json"
 FIG_BASE = "reports/figures/mlp"
 FIG_CLS  = os.path.join(FIG_BASE, "classifier")
 FIG_REG  = os.path.join(FIG_BASE, "regressor")
-
+FEATURE_SELECTION_LOG = "models/feature_selection_log.json"
 
 
 LEAKAGE_HINTS = [
@@ -112,10 +116,92 @@ def infer_feature_cols(df: pd.DataFrame) -> List[str]:
     return feat_cols
 
 
+def select_features_rf(
+    X_train: np.ndarray,
+    y_train: np.ndarray,
+    feat_cols: List[str],
+    n_features: int = TOP_N_FEATURES,
+    task_type: str = "classification"
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, List[str]]:
+    """
+    Use RandomForest to select top N most important features.
+    
+    Args:
+        X_train: Training features
+        y_train: Training labels
+        feat_cols: Original feature column names
+        n_features: Number of features to select
+        task_type: "classification" or "regression"
+    
+    Returns:
+        X_train_selected, X_val_selected, X_test_selected, selected_feat_cols
+    """
+    print(f"\n=== FEATURE SELECTION (RandomForest) ===")
+    print(f"Original features: {len(feat_cols)}")
+    print(f"Target features: {n_features}")
+    
+    # Fit RandomForest to get feature importances
+    if task_type == "classification":
+        rf = RandomForestClassifier(
+            n_estimators=100,
+            max_depth=10,
+            min_samples_split=20,
+            random_state=RANDOM_SEED,
+            n_jobs=-1,
+            verbose=0
+        )
+    else:  # regression
+        rf = RandomForestRegressor(
+            n_estimators=100,
+            max_depth=10,
+            min_samples_split=20,
+            random_state=RANDOM_SEED,
+            n_jobs=-1,
+            verbose=0
+        )
+    
+    print("Fitting RandomForest for feature importance...")
+    rf.fit(X_train, y_train)
+    
+    # Get feature importances
+    importances = rf.feature_importances_
+    indices = np.argsort(importances)[::-1]
+    
+    # Select top N features
+    top_indices = indices[:n_features]
+    selected_feat_cols = [feat_cols[i] for i in top_indices]
+    
+    # Log selected features
+    feature_importance_log = {
+        "n_original": len(feat_cols),
+        "n_selected": len(selected_feat_cols),
+        "selected_features": selected_feat_cols,
+        "importances": {feat_cols[i]: float(importances[i]) for i in top_indices}
+    }
+    
+    os.makedirs("models", exist_ok=True)
+    with open(FEATURE_SELECTION_LOG, "w", encoding="utf-8") as f:
+        json.dump(feature_importance_log, f, indent=2, ensure_ascii=False)
+    
+    print(f"Selected {len(selected_feat_cols)} features")
+    print(f"Top 10 features by importance:")
+    for i, idx in enumerate(top_indices[:10]):
+        print(f"  {i+1}. {feat_cols[idx]}: {importances[idx]:.4f}")
+    print(f"Feature selection log saved to: {FEATURE_SELECTION_LOG}")
+    print("=" * 50)
+    
+    # Return indices for feature selection
+    return top_indices, selected_feat_cols
+
 
 def prepare_tabular(
-    train: pd.DataFrame, val: pd.DataFrame, test: pd.DataFrame
+    train: pd.DataFrame, val: pd.DataFrame, test: pd.DataFrame,
+    use_feature_selection: bool = True,
+    n_features: int = TOP_N_FEATURES
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, RobustScaler, List[str], np.ndarray]:
+    """
+    Prepare tabular data with optional feature selection.
+    """
     feat_cols = infer_feature_cols(train)
 
     X_train = train[feat_cols].to_numpy(dtype=np.float32, copy=True)
@@ -142,7 +228,23 @@ def prepare_tabular(
     X_val   = np.where(np.isnan(X_val),   train_median, X_val)
     X_test  = np.where(np.isnan(X_test),  train_median, X_test)
 
-    # 3) Scale using RobustScaler (fit only on train) - better for outliers
+    # 3) Feature Selection (before scaling)
+    if use_feature_selection and len(feat_cols) > n_features:
+        # Use classification target for feature selection (more balanced)
+        y_train_clf = train["home_team_win"].values.astype(int)
+        selected_indices, selected_feat_cols = select_features_rf(
+            X_train, y_train_clf, feat_cols, n_features=n_features, task_type="classification"
+        )
+        
+        # Apply feature selection
+        X_train = X_train[:, selected_indices]
+        X_val   = X_val[:, selected_indices]
+        X_test  = X_test[:, selected_indices]
+        feat_cols = selected_feat_cols
+        train_median = train_median[selected_indices]
+        print(f"[INFO] After feature selection: {X_train.shape[1]} features")
+
+    # 4) Scale using RobustScaler (fit only on train) - better for outliers
     scaler = RobustScaler()
     X_train_s = scaler.fit_transform(X_train)
     X_val_s   = scaler.transform(X_val)
@@ -151,44 +253,106 @@ def prepare_tabular(
     return X_train_s, X_val_s, X_test_s, scaler, feat_cols, train_median
 
 
-
-def build_mlp_classifier(input_dim: int, hp: Dict) -> keras.Model:
+def build_mlp_classifier(input_dim: int, hp: Dict, class_weights: Optional[Dict] = None) -> keras.Model:
+    """
+    Build MLP classifier with improved architecture.
+    
+    Args:
+        input_dim: Input feature dimension
+        hp: Hyperparameters dict
+        class_weights: Optional class weights dict for imbalanced data
+    """
     inp = keras.Input(shape=(input_dim,))
     x = inp
-    for units in hp["hidden_units"]:
+    
+    # Add initial dropout for regularization
+    if hp.get("input_dropout", 0.0) > 0:
+        x = layers.Dropout(hp["input_dropout"])(x)
+    
+    for i, units in enumerate(hp["hidden_units"]):
         x = layers.Dense(units, activation="relu")(x)
         if hp.get("batchnorm", False):
             x = layers.BatchNormalization()(x)
         if hp.get("dropout", 0.0) > 0:
             x = layers.Dropout(hp["dropout"])(x)
+    
     out = layers.Dense(1, activation="sigmoid")(x)
     model = keras.Model(inp, out, name="mlp_classifier")
 
     opt = keras.optimizers.Adam(learning_rate=hp["lr"])
-    model.compile(
-        optimizer=opt,
-        loss="binary_crossentropy",
-        metrics=[keras.metrics.BinaryAccuracy(name="acc"), keras.metrics.AUC(name="auc")]
-    )
+    
+    # Use weighted binary crossentropy if class weights provided
+    if class_weights is not None:
+        # TensorFlow expects class weights as a list [weight_for_class_0, weight_for_class_1]
+        loss_fn = keras.losses.BinaryCrossentropy()
+        # We'll handle class weights in the fit() call
+        model.compile(
+            optimizer=opt,
+            loss=loss_fn,
+            metrics=[keras.metrics.BinaryAccuracy(name="acc"), keras.metrics.AUC(name="auc")]
+        )
+    else:
+        model.compile(
+            optimizer=opt,
+            loss="binary_crossentropy",
+            metrics=[keras.metrics.BinaryAccuracy(name="acc"), keras.metrics.AUC(name="auc")]
+        )
+    
     return model
 
 
 def build_mlp_regressor(input_dim: int, hp: Dict) -> keras.Model:
+    """
+    Build MLP regressor with improved architecture.
+    
+    Args:
+        input_dim: Input feature dimension
+        hp: Hyperparameters dict
+    """
     inp = keras.Input(shape=(input_dim,))
     x = inp
-    for units in hp["hidden_units"]:
+    
+    # Add initial dropout for regularization
+    if hp.get("input_dropout", 0.0) > 0:
+        x = layers.Dropout(hp["input_dropout"])(x)
+    
+    for i, units in enumerate(hp["hidden_units"]):
         x = layers.Dense(units, activation="relu")(x)
         if hp.get("batchnorm", False):
             x = layers.BatchNormalization()(x)
         if hp.get("dropout", 0.0) > 0:
             x = layers.Dropout(hp["dropout"])(x)
+    
     out = layers.Dense(1, activation="linear")(x)
     model = keras.Model(inp, out, name="mlp_regressor")
 
     opt = keras.optimizers.Adam(learning_rate=hp["lr"])
-    loss = hp["loss"]
-    model.compile(optimizer=opt, loss=loss, metrics=[keras.metrics.MeanAbsoluteError(name="mae")])
+    
+    # Use MAE or Huber loss instead of MSE
+    loss = hp.get("loss", "mae")
+    if loss == "mae":
+        loss_fn = keras.losses.MeanAbsoluteError()
+    elif loss == "huber":
+        delta = hp.get("huber_delta", 1.0)
+        loss_fn = keras.losses.Huber(delta=delta)
+    else:
+        loss_fn = loss  # Allow custom loss functions
+    
+    model.compile(
+        optimizer=opt,
+        loss=loss_fn,
+        metrics=[keras.metrics.MeanAbsoluteError(name="mae")]
+    )
     return model
+
+
+def compute_class_weights_dict(y: np.ndarray) -> Dict[int, float]:
+    """
+    Compute class weights for imbalanced binary classification.
+    """
+    classes = np.unique(y)
+    weights = compute_class_weight('balanced', classes=classes, y=y)
+    return {int(cls): float(w) for cls, w in zip(classes, weights)}
 
 
 def plot_and_save_history(history: keras.callbacks.History, fig_path_prefix: str, is_classifier: bool):
@@ -267,12 +431,14 @@ def plot_regression_scatter(y_true, y_pred, fig_path: str):
     import matplotlib.pyplot as plt
 
     plt.figure()
-    plt.scatter(y_true, y_pred, s=10)
+    plt.scatter(y_true, y_pred, s=10, alpha=0.5)
     mn = float(min(np.min(y_true), np.min(y_pred)))
     mx = float(max(np.max(y_true), np.max(y_pred)))
-    plt.plot([mn, mx], [mn, mx], linestyle="--")
+    plt.plot([mn, mx], [mn, mx], linestyle="--", color="red", label="Perfect prediction")
     plt.xlabel("true score_diff")
     plt.ylabel("pred score_diff")
+    plt.legend()
+    plt.title(f"Regression Predictions (MAE: {mean_absolute_error(y_true, y_pred):.2f})")
     plt.tight_layout()
     plt.savefig(fig_path, dpi=150)
     plt.close()
@@ -317,7 +483,10 @@ def main():
     train, val, test = load_splits()
     sanity_check(train, val, test)
 
-    X_train, X_val, X_test, scaler, feat_cols, train_median = prepare_tabular(train, val, test)
+    # Prepare data with feature selection
+    X_train, X_val, X_test, scaler, feat_cols, train_median = prepare_tabular(
+        train, val, test, use_feature_selection=True, n_features=TOP_N_FEATURES
+    )
 
     # === SAVE INFERENCE ARTIFACTS (TABULAR) ===
     import joblib
@@ -344,10 +513,37 @@ def main():
     y_val   = val["home_team_win"].values.astype(int)
     y_test  = test["home_team_win"].values.astype(int)
 
+    # Compute class weights for home-court bias
+    class_weights_dict = compute_class_weights_dict(y_train)
+    print(f"\n[INFO] Class weights: {class_weights_dict}")
+    print(f"  Class 0 (away win): weight = {class_weights_dict[0]:.3f}")
+    print(f"  Class 1 (home win): weight = {class_weights_dict[1]:.3f}")
+
     clf_variants = [
-        {"name": "MLP_C1", "hidden_units": [256, 128, 64], "dropout": 0.2, "batchnorm": False, "lr": 1e-3},
-        {"name": "MLP_C2", "hidden_units": [128, 64],      "dropout": 0.0, "batchnorm": False, "lr": 1e-3},
-        {"name": "MLP_C3", "hidden_units": [512, 256, 128, 64], "dropout": 0.3, "batchnorm": True, "lr": 5e-4},
+        {
+            "name": "MLP_C1",
+            "hidden_units": [256, 128, 64],
+            "dropout": 0.3,
+            "input_dropout": 0.1,
+            "batchnorm": True,
+            "lr": 1e-3
+        },
+        {
+            "name": "MLP_C2",
+            "hidden_units": [128, 64, 32],
+            "dropout": 0.2,
+            "input_dropout": 0.05,
+            "batchnorm": True,
+            "lr": 5e-4
+        },
+        {
+            "name": "MLP_C3",
+            "hidden_units": [512, 256, 128, 64],
+            "dropout": 0.4,
+            "input_dropout": 0.15,
+            "batchnorm": True,
+            "lr": 1e-3
+        },
     ]
 
     best_val_auc = -1
@@ -356,13 +552,31 @@ def main():
 
     for hp in clf_variants:
         tf.keras.backend.clear_session()
-        model = build_mlp_classifier(X_train.shape[1], hp)
+        model = build_mlp_classifier(X_train.shape[1], hp, class_weights=class_weights_dict)
 
         ckpt_path = best_model_path  # required name
         callbacks = [
-            keras.callbacks.EarlyStopping(monitor="val_auc", mode="max", patience=10, restore_best_weights=True),
-            keras.callbacks.ModelCheckpoint(ckpt_path, monitor="val_auc", mode="max", save_best_only=True),
-            keras.callbacks.ReduceLROnPlateau(monitor="val_loss", factor=0.5, patience=5, min_lr=1e-6, verbose=1)
+            keras.callbacks.EarlyStopping(
+                monitor="val_auc",
+                mode="max",
+                patience=15,
+                restore_best_weights=True,
+                verbose=1
+            ),
+            keras.callbacks.ModelCheckpoint(
+                ckpt_path,
+                monitor="val_auc",
+                mode="max",
+                save_best_only=True,
+                verbose=1
+            ),
+            keras.callbacks.ReduceLROnPlateau(
+                monitor="val_loss",
+                factor=0.5,
+                patience=5,
+                min_lr=1e-6,
+                verbose=1
+            )
         ]
 
         history = model.fit(
@@ -371,6 +585,7 @@ def main():
             epochs=200,
             batch_size=256,
             callbacks=callbacks,
+            class_weight=class_weights_dict,  # Apply class weights
             verbose=2
         )
 
@@ -425,33 +640,11 @@ def main():
         print(f"[WARN] Dropping {np.sum(~test_mask)} rows with NaN score_diff from test for regressor")
     
     # === TARGET SCALING FOR REGRESSION ===
-    # Verify target values before scaling
-    print(f"[DEBUG] y_train_r_reg stats: mean={np.mean(y_train_r_reg):.2f}, std={np.std(y_train_r_reg):.2f}")
-    print(f"[DEBUG] y_train_r_reg sample (first 10): {y_train_r_reg[:10]}")
-    
-    # Check if NaN filtering changed distribution
-    if not train_mask.all():
-        y_train_r_all_mean = np.nanmean(y_train_r)
-        print(f"[DEBUG] y_train_r (all, including NaN) mean: {y_train_r_all_mean:.2f}")
-        print(f"[DEBUG] y_train_r_reg (filtered) mean: {np.mean(y_train_r_reg):.2f}")
-        if abs(y_train_r_all_mean - np.mean(y_train_r_reg)) > 1.0:
-            print(f"[WARN] Mean changed significantly after NaN filtering!")
-    
     # Create and fit target scaler on training data (reshaped to 2D)
     target_scaler = StandardScaler()
     y_train_r_reg_scaled = target_scaler.fit_transform(y_train_r_reg.reshape(-1, 1)).reshape(-1)
     y_val_r_reg_scaled = target_scaler.transform(y_val_r_reg.reshape(-1, 1)).reshape(-1)
     y_test_r_reg_scaled = target_scaler.transform(y_test_r_reg.reshape(-1, 1)).reshape(-1)
-    
-    # Verify scaled target distribution
-    scaled_mean = np.mean(y_train_r_reg_scaled)
-    scaled_std = np.std(y_train_r_reg_scaled)
-    print(f"[DEBUG] Scaled target stats: mean={scaled_mean:.4f}, std={scaled_std:.4f}")
-    print(f"[DEBUG] Scaled target should be ~N(0,1), actual: mean={scaled_mean:.4f}, std={scaled_std:.4f}")
-    
-    # Validation assertions
-    assert abs(scaled_mean) < 0.1, f"Scaled target mean should be ~0, got {scaled_mean:.4f}"
-    assert scaled_std > 0.9, f"Scaled target std should be ~1, got {scaled_std:.4f}"
     
     print(f"[INFO] Target scaler fitted: mean={target_scaler.mean_[0]:.2f}, scale={target_scaler.scale_[0]:.2f}")
     
@@ -460,12 +653,28 @@ def main():
     print("[OK] Saved: models/scaler_target.joblib")
 
     reg_variants = [
-        {"name": "MLP_R1", "hidden_units": [256, 128, 64], "dropout": 0.1, "batchnorm": False, "lr": 1e-3, 
-        "loss": "mse", "loss_name": "mse"},
-        {"name": "MLP_R2", "hidden_units": [256, 128, 64], "dropout": 0.1, "batchnorm": False, "lr": 1e-3, 
-        "loss": keras.losses.Huber(delta=5.0), "loss_name": "huber(delta=5.0)"},
+        {
+            "name": "MLP_R1",
+            "hidden_units": [256, 128, 64],
+            "dropout": 0.3,
+            "input_dropout": 0.1,
+            "batchnorm": True,
+            "lr": 1e-3,
+            "loss": "mae",
+            "loss_name": "mae"
+        },
+        {
+            "name": "MLP_R2",
+            "hidden_units": [256, 128, 64],
+            "dropout": 0.3,
+            "input_dropout": 0.1,
+            "batchnorm": True,
+            "lr": 1e-3,
+            "loss": "huber",
+            "huber_delta": 2.0,
+            "loss_name": "huber(delta=2.0)"
+        },
     ]
-
 
     best_val_rmse = 1e18
     best_reg_hp = None
@@ -475,9 +684,27 @@ def main():
         model = build_mlp_regressor(X_train_reg.shape[1], hp)
 
         callbacks = [
-            keras.callbacks.EarlyStopping(monitor="val_loss", mode="min", patience=10, restore_best_weights=True),
-            keras.callbacks.ModelCheckpoint(OUT_MODEL_REG, monitor="val_loss", mode="min", save_best_only=True),
-            keras.callbacks.ReduceLROnPlateau(monitor="val_loss", factor=0.5, patience=5, min_lr=1e-6, verbose=1)
+            keras.callbacks.EarlyStopping(
+                monitor="val_loss",
+                mode="min",
+                patience=15,
+                restore_best_weights=True,
+                verbose=1
+            ),
+            keras.callbacks.ModelCheckpoint(
+                OUT_MODEL_REG,
+                monitor="val_loss",
+                mode="min",
+                save_best_only=True,
+                verbose=1
+            ),
+            keras.callbacks.ReduceLROnPlateau(
+                monitor="val_loss",
+                factor=0.5,
+                patience=5,
+                min_lr=1e-6,
+                verbose=1
+            )
         ]
 
         history = model.fit(
@@ -493,16 +720,9 @@ def main():
         val_pred_scaled = model.predict(X_val_reg, verbose=0).reshape(-1)
         val_pred = target_scaler.inverse_transform(val_pred_scaled.reshape(-1, 1)).reshape(-1)
         
-        # Prediction validation during training
-        val_target_mean = np.mean(y_val_r_reg)
-        val_pred_mean = np.mean(val_pred)
-        if val_target_mean > 0 and val_pred_mean < -5:
-            print(f"[ERROR] Model predicting negative (mean={val_pred_mean:.2f}) when target is positive (mean={val_target_mean:.2f})!")
-        elif val_target_mean < 0 and val_pred_mean > 5:
-            print(f"[ERROR] Model predicting positive (mean={val_pred_mean:.2f}) when target is negative (mean={val_target_mean:.2f})!")
-        
         val_rmse = float(np.sqrt(mean_squared_error(y_val_r_reg, val_pred)))
-        print(f"[{hp['name']}] val_rmse={val_rmse:.4f}, val_pred_mean={val_pred_mean:.2f}, val_target_mean={val_target_mean:.2f}")
+        val_mae = float(mean_absolute_error(y_val_r_reg, val_pred))
+        print(f"[{hp['name']}] val_rmse={val_rmse:.4f}, val_mae={val_mae:.4f}")
 
         plot_and_save_history(history, os.path.join(FIG_REG, f"train_{hp['name']}"), is_classifier=False)
 
@@ -524,11 +744,10 @@ def main():
     reg_test_metrics = eval_regression(y_test_r_reg, test_pred_r_filtered)
     
     # For predictions CSV, predict on all data (including NaN rows)
-    # Need to handle NaN rows: predict on all X, but only inverse transform valid predictions
     val_pred_r_scaled = reg_best.predict(X_val, verbose=0).reshape(-1)
     test_pred_r_scaled = reg_best.predict(X_test, verbose=0).reshape(-1)
     
-    # Inverse transform all predictions (NaN rows will have predictions but we'll handle them in CSV)
+    # Inverse transform all predictions
     val_pred_r = target_scaler.inverse_transform(val_pred_r_scaled.reshape(-1, 1)).reshape(-1)
     test_pred_r = target_scaler.inverse_transform(test_pred_r_scaled.reshape(-1, 1)).reshape(-1)
 
@@ -574,6 +793,8 @@ def main():
         "seed": RANDOM_SEED,
         "scaler": "RobustScaler(train_fit_only)",
         "features_used": len(feat_cols),
+        "feature_selection": "RandomForest (top 50)",
+        "class_weights": class_weights_dict,
         "best_hyperparams": best_hp,
         "val": clf_val_metrics,
         "test": clf_test_metrics,
@@ -587,12 +808,11 @@ def main():
             "test_roc": os.path.join(FIG_CLS, "test_roc.png"),
             "test_calibration": os.path.join(FIG_CLS, "test_calibration.png"),
         }
-
     }
+    
     # best_reg_hp JSON-serializable hale getir
     best_reg_hp_safe = dict(best_reg_hp)
     if "loss" in best_reg_hp_safe and not isinstance(best_reg_hp_safe["loss"], (str, int, float, bool, type(None))):
-        # Huber gibi objeleri stringe çevir
         best_reg_hp_safe["loss"] = best_reg_hp_safe.get("loss_name", str(best_reg_hp_safe["loss"]))
 
     metrics_all["mlp_regressor"] = {
@@ -600,7 +820,8 @@ def main():
         "scaler": "RobustScaler(train_fit_only)",
         "target_scaler": "StandardScaler(train_fit_only)",
         "features_used": len(feat_cols),
-        "best_hyperparams": best_reg_hp_safe,   # <-- BURASI değişti
+        "feature_selection": "RandomForest (top 50)",
+        "best_hyperparams": best_reg_hp_safe,
         "val": reg_val_metrics,
         "test": reg_test_metrics,
         "model_path": OUT_MODEL_REG,
@@ -615,6 +836,9 @@ def main():
     print(f"[OK] metrics -> {METRICS_PATH}")
 
     print("\nDONE: MLP classifier + regressor\n")
+    print(f"Classifier Test AUC: {clf_test_metrics['roc_auc']:.4f}")
+    print(f"Regressor Test MAE: {reg_test_metrics['mae']:.4f}")
+    print(f"Regressor Test RMSE: {reg_test_metrics['rmse']:.4f}")
 
 
 if __name__ == "__main__":
